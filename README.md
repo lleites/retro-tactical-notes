@@ -31,6 +31,10 @@ npm test
 
 The test suite covers note operations, filtering, tags, formatting helpers, backup validation, undo/redo history, and production rendering.
 
+## GitHub Pages
+
+Every push to `main` builds and deploys the static browser-only app to GitHub Pages. The Pages build uses `npm run build:pages` and is configured for the `/retro-tactical-notes/` project path.
+
 ## Privacy
 
 All content remains on the current device in browser storage. Clearing site data removes the notes unless they were exported first.
