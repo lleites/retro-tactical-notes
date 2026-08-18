@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   addTagToNote,
   applyMarkup,
@@ -15,6 +15,7 @@ import {
   undoHistory,
   updateNote,
 } from "@/lib/notes.mjs";
+import { LLM_MODEL, requestCompletion } from "@/lib/llmClient.mjs";
 
 type Folder = "Field Notes" | "Projects" | "Personal" | "Ideas" | "Archive";
 type Theme = "olive" | "midnight" | "paper";
@@ -22,6 +23,8 @@ type Density = "compact" | "comfortable";
 type Note = { id: string; title: string; content: string; tags: string[]; folder: Folder; color: string; starred: boolean; createdAt: string; updatedAt: string };
 type Preferences = { theme: Theme; density: Density; animations: boolean; sounds: boolean };
 type NoteHistory = { past: Note[][]; present: Note[]; future: Note[][] };
+type ChatMessage = { id: string; role: "user" | "assistant"; content: string };
+type ChatMode = "ask" | "rewrite";
 
 const NOTES_KEY = "retro-notes:v1";
 const PREFS_KEY = "retro-notes:preferences:v1";
@@ -38,6 +41,7 @@ const seedNotes: Note[] = [
 function makeId() { return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `note-${Date.now()}` }
 function formatUpdated(iso: string) { return new Intl.DateTimeFormat("en-GB", { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC" }).format(new Date(iso)) }
 function folderCode(folder: Folder) { return folder.split(" ").map((word) => word[0]).join("").slice(0, 2).toUpperCase() }
+function cleanRewrite(value: string) { return value.replace(/^```(?:markdown|md|text)?\s*/i, "").replace(/\s*```$/, "").trim() }
 
 export default function Home() {
   const [history, setHistory] = useState<NoteHistory>(() => createHistory(seedNotes) as NoteHistory);
@@ -50,6 +54,11 @@ export default function Home() {
   const [hydrated, setHydrated] = useState(false);
   const [saveState, setSaveState] = useState("LOCAL / READY");
   const [tagDraft, setTagDraft] = useState("");
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatDraft, setChatDraft] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatError, setChatError] = useState("");
+  const [chatByNote, setChatByNote] = useState<Record<string, ChatMessage[]>>({});
   const [qaMobile, setQaMobile] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
@@ -88,6 +97,7 @@ export default function Home() {
     return filterNotes(notes, filter, search) as Note[];
   }, [filter, notes, search]);
   const selectedNote = notes.find((note) => note.id === selectedId) ?? null;
+  const chatMessages = selectedNote ? chatByNote[selectedNote.id] ?? [] : [];
   const wordCount = selectedNote?.content.trim() ? selectedNote.content.trim().split(/\s+/).length : 0;
 
   function setNotes(updater: Note[] | ((current: Note[]) => Note[])) {
@@ -112,6 +122,30 @@ export default function Home() {
   function saveNow() { localStorage.setItem(NOTES_KEY, JSON.stringify(notes)); setSaveState("LOCAL / SAVED") }
   function undo() { if (!history.past.length) return; setSaveState("LOCAL / SAVING…"); setHistory((current) => undoHistory(current) as NoteHistory) }
   function redo() { if (!history.future.length) return; setSaveState("LOCAL / SAVING…"); setHistory((current) => redoHistory(current) as NoteHistory) }
+  function appendChat(noteId: string, message: ChatMessage) { setChatByNote((current) => ({ ...current, [noteId]: [...(current[noteId] ?? []), message] })) }
+  async function sendChat(mode: ChatMode) {
+    const target = selectedNote; const instruction = chatDraft.trim();
+    if (!target || !instruction || chatLoading) return;
+    const priorMessages = chatByNote[target.id] ?? [];
+    const userMessage: ChatMessage = { id: makeId(), role: "user", content: instruction };
+    appendChat(target.id, userMessage); setChatDraft(""); setChatError(""); setChatLoading(true);
+    const noteContext = `Title: ${target.title || "Untitled note"}\n\nNote content:\n${target.content || "(empty note)"}`;
+    const system = mode === "rewrite"
+      ? `You rewrite a single Markdown note. Apply the user's requested changes while preserving useful information that was not targeted. Return only the complete replacement note content, without commentary or code fences.\n\n${noteContext}`
+      : `You are a concise assistant discussing one note. Use the supplied note as the primary context. If the answer is not in the note, say so. Do not claim to edit the note; the interface has a separate rewrite action.\n\n${noteContext}`;
+    const conversation = priorMessages.slice(-6).map(({ role, content }) => ({ role, content }));
+    try {
+      const response = await requestCompletion([{ role: "system", content: system }, ...conversation, { role: "user", content: instruction }]);
+      if (mode === "rewrite") {
+        const rewritten = cleanRewrite(response);
+        setNotes((current) => updateNote(current, target.id, { content: rewritten }, new Date().toISOString()) as Note[]);
+        appendChat(target.id, { id: makeId(), role: "assistant", content: "Rewrite applied to the note. You can use Undo to restore the previous version." });
+      } else appendChat(target.id, { id: makeId(), role: "assistant", content: response });
+    } catch (error) {
+      setChatError(error instanceof Error ? error.message : "The AI request failed. Try again.");
+    } finally { setChatLoading(false) }
+  }
+  function submitChat(event: FormEvent) { event.preventDefault(); void sendChat("ask") }
 
   useEffect(() => {
     const onShortcut = (event: globalThis.KeyboardEvent) => {
@@ -142,7 +176,7 @@ export default function Home() {
             <button className={`folder-button ${filter === "Favorites" ? "active" : ""}`} onClick={() => setFilter("Favorites")}><span className="folder-glyph star">★</span><span>Favorites</span><b>{notes.filter((note) => note.starred).length}</b></button>
             <div className="folder-divider" />
             {folders.map((folder) => <button key={folder} className={`folder-button ${filter === folder ? "active" : ""}`} onClick={() => setFilter(folder)}><span className="folder-glyph">{folderCode(folder)}</span><span>{folder}</span><b>{notes.filter((note) => note.folder === folder).length}</b></button>)}
-            <div className="local-card"><span className="local-card-icon">▣</span><strong>DEVICE STORAGE</strong><p>Nothing leaves this browser.</p></div>
+            <div className="local-card"><span className="local-card-icon">▣</span><strong>DEVICE STORAGE</strong><p>Notes stay here unless sent to AI.</p></div>
           </aside>
 
           <section className="note-browser">
@@ -156,10 +190,21 @@ export default function Home() {
 
           <section className="editor-panel">
             {selectedNote ? <>
-              <div className="editor-topline"><div className="editor-file-status"><strong>{selectedNote.title || "UNTITLED TRANSMISSION"}</strong><span>{saveState} · {formatUpdated(selectedNote.updatedAt)}</span></div><label><span>FOLDER</span><select value={selectedNote.folder} onChange={(event) => updateSelected({ folder: event.target.value as Folder })}>{folders.map((folder) => <option key={folder}>{folder}</option>)}</select></label><div className="editor-actions"><button className={`star-button ${selectedNote.starred ? "active" : ""}`} onClick={() => updateSelected({ starred: !selectedNote.starred })} aria-label={selectedNote.starred ? "Remove favorite" : "Add favorite"}>★</button><button className="danger-button" onClick={deleteSelected}>DELETE</button><button className="save-button" onClick={saveNow}>▣ SAVE</button></div></div>
+              <div className="editor-topline"><div className="editor-file-status"><strong>{selectedNote.title || "UNTITLED TRANSMISSION"}</strong><span>{saveState} · {formatUpdated(selectedNote.updatedAt)}</span></div><label><span>FOLDER</span><select value={selectedNote.folder} onChange={(event) => updateSelected({ folder: event.target.value as Folder })}>{folders.map((folder) => <option key={folder}>{folder}</option>)}</select></label><div className="editor-actions"><button className="chat-button" onClick={() => { setChatOpen(true); setChatError("") }} aria-label="Chat with note">✦ CHAT</button><button className={`star-button ${selectedNote.starred ? "active" : ""}`} onClick={() => updateSelected({ starred: !selectedNote.starred })} aria-label={selectedNote.starred ? "Remove favorite" : "Add favorite"}>★</button><button className="danger-button" onClick={deleteSelected}>DELETE</button><button className="save-button" onClick={saveNow}>▣ SAVE</button></div></div>
               <div className="editor-toolbar" aria-label="Formatting shortcuts"><button className="history-tool" onClick={undo} disabled={!history.past.length} aria-label="Undo">↶</button><button className="history-tool" onClick={redo} disabled={!history.future.length} aria-label="Redo">↷</button><span className="tool-separator" /><button onClick={() => insertMarkup("**", "**")} aria-label="Bold"><b>B</b></button><button onClick={() => insertMarkup("_", "_")} aria-label="Italic"><i>I</i></button><button onClick={() => insertMarkup("<u>", "</u>")} aria-label="Underline"><u>U</u></button><button onClick={() => insertMarkup("## ")} aria-label="Heading">H2</button><button onClick={() => insertMarkup("- ")} aria-label="Bulleted list">• LIST</button><button onClick={() => insertMarkup("1. ")} aria-label="Numbered list">1. LIST</button><button onClick={() => insertMarkup("- [ ] ")} aria-label="Checklist">☐ TASK</button><button onClick={() => insertMarkup("`", "`")} aria-label="Code">&lt;/&gt;</button><button onClick={() => insertMarkup("[", "](url)")} aria-label="Link">↗ LINK</button><span>MARKDOWN FIELD EDITOR</span></div>
               <article className="paper-sheet"><div className="paper-stamp">LOCAL FILE · {selectedNote.id.slice(0, 6).toUpperCase()}</div><input className="title-input" value={selectedNote.title} onChange={(event) => updateSelected({ title: event.target.value })} aria-label="Note title" placeholder="Untitled transmission" /><textarea ref={editorRef} value={selectedNote.content} onChange={(event) => updateSelected({ content: event.target.value })} placeholder="Begin field note…" aria-label="Note content" spellCheck="true" /><div className="tag-row">{selectedNote.tags.map((tag) => <button key={tag} onClick={() => setNotes((current) => removeTagFromNote(current, selectedNote.id, tag, new Date().toISOString()) as Note[])} title="Remove tag">#{tag} ×</button>)}<input value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} onKeyDown={addTag} placeholder="+ tag" aria-label="Add tag" /></div></article>
               <footer className="editor-footer"><div className="palette" aria-label="Note color"><span>MARKER</span>{noteColors.map((color) => <button key={color} style={{ background: color }} className={selectedNote.color === color ? "active" : ""} onClick={() => updateSelected({ color })} aria-label={`Use color ${color}`} />)}</div><div className="document-stats"><span>{wordCount} WORDS</span><span>{selectedNote.content.length} CHARACTERS</span><span>UPDATED {formatUpdated(selectedNote.updatedAt)}</span></div></footer>
+              {chatOpen && <aside className="chat-panel" role="dialog" aria-label={`Chat with ${selectedNote.title || "note"}`}>
+                <header><div><span className="eyebrow">NOTE LINK ACTIVE</span><strong>TACTICAL AI</strong><small>{LLM_MODEL} · ANONYMOUS</small></div><button onClick={() => setChatOpen(false)} aria-label="Close note chat">×</button></header>
+                <div className="chat-context"><span>IN CONTEXT</span><strong>{selectedNote.title || "Untitled note"}</strong><small>The current title and content are sent to OVHcloud only when you submit.</small></div>
+                <div className="chat-log" aria-live="polite">
+                  {!chatMessages.length && <div className="chat-empty"><span>✦</span><strong>ASK ABOUT THIS NOTE</strong><p>Discuss its contents, or enter an instruction and choose Rewrite note to replace the body.</p></div>}
+                  {chatMessages.map((message) => <div key={message.id} className={`chat-message ${message.role}`}><span>{message.role === "user" ? "YOU" : "AI"}</span><p>{message.content}</p></div>)}
+                  {chatLoading && <div className="chat-loading"><i /><span>CONTACTING OVH ENDPOINT…</span></div>}
+                </div>
+                {chatError && <div className="chat-error" role="alert">{chatError}</div>}
+                <form onSubmit={submitChat}><textarea value={chatDraft} onChange={(event) => setChatDraft(event.target.value)} placeholder="Ask or describe the rewrite…" aria-label="Message about note" disabled={chatLoading} /><div><small>Anonymous limit: 2 requests/minute per IP and model.</small><span><button type="submit" className="secondary-button" disabled={!chatDraft.trim() || chatLoading}>ASK</button><button type="button" className="primary-button" onClick={() => void sendChat("rewrite")} disabled={!chatDraft.trim() || chatLoading}>↻ REWRITE NOTE</button></span></div></form>
+              </aside>}
             </> : <div className="empty-editor"><div className="empty-badge">RT</div><h2>NO FILE SELECTED</h2><p>Create a new note or choose a record from the archive.</p><button className="primary-button" onClick={createNote}>＋ NEW NOTE</button></div>}
           </section>
         </div>
@@ -179,7 +224,7 @@ function SettingsPanel({ preferences, setPreferences, noteCount, exportNotes, im
         <section className="setting-card two-column"><div><span className="eyebrow">PIXEL DENSITY</span><h2>Spacing</h2><p>Control how much information fits on screen.</p></div><div className="segmented"><button className={preferences.density === "compact" ? "active" : ""} onClick={() => setPreferences({ ...preferences, density: "compact" })}>COMPACT</button><button className={preferences.density === "comfortable" ? "active" : ""} onClick={() => setPreferences({ ...preferences, density: "comfortable" })}>COMFORTABLE</button></div></section>
         <section className="setting-card two-column"><div><span className="eyebrow">INTERFACE EFFECTS</span><h2>Motion & sound</h2><p>Keep the desk quiet or add a little arcade response.</p></div><div className="toggle-stack"><label><span><strong>Animations</strong><small>Panel and selection movement</small></span><input type="checkbox" checked={preferences.animations} onChange={(event) => setPreferences({ ...preferences, animations: event.target.checked })} /></label><label><span><strong>Interface sounds</strong><small>Reserved for a future update</small></span><input type="checkbox" checked={preferences.sounds} onChange={(event) => setPreferences({ ...preferences, sounds: event.target.checked })} /></label></div></section>
         <section className="setting-card backup-card"><div><span className="eyebrow">LOCAL STORAGE ONLY</span><h2>Backup & restore</h2><p>{noteCount} notes are stored on this device. Export a JSON file before clearing browser data or moving devices.</p></div><div className="backup-actions"><button className="primary-button" onClick={exportNotes}>↓ EXPORT JSON</button><button className="secondary-button" onClick={importNotes}>↑ IMPORT JSON</button><button className="danger-button" onClick={clearAll}>ERASE ALL DATA</button></div></section>
-        <div className="about-strip"><span className="brand-mark">RT</span><div><strong>RETRO TACTICAL NOTES · MK-II</strong><p>An original local-first notebook. Auto-save and 100-step undo history run entirely on this device.</p></div><small>BUILD 1.3.0</small></div>
+        <div className="about-strip"><span className="brand-mark">RT</span><div><strong>RETRO TACTICAL NOTES · MK-II</strong><p>Notes stay local. Optional AI sends only the active note and chat messages when requested.</p></div><small>BUILD 1.4.0</small></div>
       </div>
     </div>
   </section>;
