@@ -77,14 +77,16 @@ test("deleteNote removes only the requested note", () => {
   assert.strictEqual(deleteNote(notes, "missing"), notes);
 });
 
-test("filterNotes filters folders, favorites, title, content, and tags", () => {
+test("filterNotes separates archive, favorites, tag groups, and search", () => {
   const notes = [
     note({ id: "old", updatedAt: "2026-08-17T09:00:00.000Z" }),
     note({ id: "new", title: "Weekend", content: "Lake trip", folder: "Personal", tags: ["travel"], starred: true, updatedAt: "2026-08-17T12:00:00.000Z" }),
+    note({ id: "archived", folder: "Archive", tags: ["travel"], starred: true, updatedAt: "2026-08-17T13:00:00.000Z" }),
   ];
   assert.deepEqual(filterNotes(notes, "All", "").map(({ id }) => id), ["new", "old"]);
   assert.deepEqual(filterNotes(notes, "Favorites", "").map(({ id }) => id), ["new"]);
-  assert.deepEqual(filterNotes(notes, "Projects", "").map(({ id }) => id), ["old"]);
+  assert.deepEqual(filterNotes(notes, "Archive", "").map(({ id }) => id), ["archived"]);
+  assert.deepEqual(filterNotes(notes, "tag:travel", "").map(({ id }) => id), ["new"]);
   assert.deepEqual(filterNotes(notes, "All", "lake").map(({ id }) => id), ["new"]);
   assert.deepEqual(filterNotes(notes, "All", "TRAVEL").map(({ id }) => id), ["new"]);
 });
@@ -129,4 +131,14 @@ test("task toggling changes only a valid checkbox line", () => {
   const content = "Intro\n- [ ] Verify autosave\n- ordinary item";
   assert.equal(toggleMarkdownTask(content, 1, true), "Intro\n- [x] Verify autosave\n- ordinary item");
   assert.equal(toggleMarkdownTask(content, 2, true), content);
+});
+
+test("markdown parser recognizes tables and column alignment", () => {
+  const blocks = parseMarkdown("| Item | Status | Score |\n| :--- | :---: | ---: |\n| Preview | Ready | 10 |");
+  assert.deepEqual(blocks, [{
+    type: "table",
+    headers: ["Item", "Status", "Score"],
+    alignments: ["left", "center", "right"],
+    rows: [["Preview", "Ready", "10"]],
+  }]);
 });
