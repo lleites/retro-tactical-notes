@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   addTagToNote,
   applyMarkup,
@@ -16,6 +16,7 @@ import {
   updateNote,
 } from "@/lib/notes.mjs";
 import { LLM_MODEL, requestCompletion } from "@/lib/llmClient.mjs";
+import { parseMarkdown, toggleMarkdownTask } from "@/lib/markdown.mjs";
 
 type Folder = "Field Notes" | "Projects" | "Personal" | "Ideas" | "Archive";
 type Theme = "olive" | "midnight" | "paper";
@@ -25,6 +26,8 @@ type Preferences = { theme: Theme; density: Density; animations: boolean; sounds
 type NoteHistory = { past: Note[][]; present: Note[]; future: Note[][] };
 type ChatMessage = { id: string; role: "user" | "assistant"; content: string };
 type ChatMode = "ask" | "rewrite";
+type EditorMode = "edit" | "preview";
+type MarkdownBlock = { type: string; level?: number; text?: string; language?: string; items?: { text: string; checked?: boolean; lineIndex?: number }[] };
 
 const NOTES_KEY = "retro-notes:v1";
 const PREFS_KEY = "retro-notes:preferences:v1";
@@ -42,6 +45,16 @@ function makeId() { return typeof crypto !== "undefined" && "randomUUID" in cryp
 function formatUpdated(iso: string) { return new Intl.DateTimeFormat("en-GB", { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC" }).format(new Date(iso)) }
 function folderCode(folder: Folder) { return folder.split(" ").map((word) => word[0]).join("").slice(0, 2).toUpperCase() }
 function cleanRewrite(value: string) { return value.replace(/^```(?:markdown|md|text)?\s*/i, "").replace(/\s*```$/, "").trim() }
+function renderInline(value: string): ReactNode[] {
+  const tokenPattern = /(\[[^\]]+\]\(https?:\/\/[^\s)]+\)|`[^`]+`|\*\*[^*]+\*\*|_[^_]+_)/g;
+  return value.split(tokenPattern).filter(Boolean).map((part, index) => {
+    const link = part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/); if (link) return <a key={index} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a>;
+    if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith("_") && part.endsWith("_")) return <em key={index}>{part.slice(1, -1)}</em>;
+    if (part.startsWith("`") && part.endsWith("`")) return <code key={index}>{part.slice(1, -1)}</code>;
+    return part;
+  });
+}
 
 export default function Home() {
   const [history, setHistory] = useState<NoteHistory>(() => createHistory(seedNotes) as NoteHistory);
@@ -54,6 +67,7 @@ export default function Home() {
   const [hydrated, setHydrated] = useState(false);
   const [saveState, setSaveState] = useState("LOCAL / READY");
   const [tagDraft, setTagDraft] = useState("");
+  const [editorMode, setEditorMode] = useState<EditorMode>("edit");
   const [chatOpen, setChatOpen] = useState(false);
   const [chatDraft, setChatDraft] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
@@ -122,6 +136,7 @@ export default function Home() {
   function saveNow() { localStorage.setItem(NOTES_KEY, JSON.stringify(notes)); setSaveState("LOCAL / SAVED") }
   function undo() { if (!history.past.length) return; setSaveState("LOCAL / SAVING…"); setHistory((current) => undoHistory(current) as NoteHistory) }
   function redo() { if (!history.future.length) return; setSaveState("LOCAL / SAVING…"); setHistory((current) => redoHistory(current) as NoteHistory) }
+  function toggleTask(lineIndex: number, checked: boolean) { if (selectedNote) updateSelected({ content: toggleMarkdownTask(selectedNote.content, lineIndex, checked) }) }
   function appendChat(noteId: string, message: ChatMessage) { setChatByNote((current) => ({ ...current, [noteId]: [...(current[noteId] ?? []), message] })) }
   async function sendChat(mode: ChatMode) {
     const target = selectedNote; const instruction = chatDraft.trim();
@@ -190,9 +205,9 @@ export default function Home() {
 
           <section className="editor-panel">
             {selectedNote ? <>
-              <div className="editor-topline"><div className="editor-file-status"><strong>{selectedNote.title || "UNTITLED TRANSMISSION"}</strong><span>{saveState} · {formatUpdated(selectedNote.updatedAt)}</span></div><label><span>FOLDER</span><select value={selectedNote.folder} onChange={(event) => updateSelected({ folder: event.target.value as Folder })}>{folders.map((folder) => <option key={folder}>{folder}</option>)}</select></label><div className="editor-actions"><button className="chat-button" onClick={() => { setChatOpen(true); setChatError("") }} aria-label="Chat with note">✦ CHAT</button><button className={`star-button ${selectedNote.starred ? "active" : ""}`} onClick={() => updateSelected({ starred: !selectedNote.starred })} aria-label={selectedNote.starred ? "Remove favorite" : "Add favorite"}>★</button><button className="danger-button" onClick={deleteSelected}>DELETE</button><button className="save-button" onClick={saveNow}>▣ SAVE</button></div></div>
-              <div className="editor-toolbar" aria-label="Formatting shortcuts"><button className="history-tool" onClick={undo} disabled={!history.past.length} aria-label="Undo">↶</button><button className="history-tool" onClick={redo} disabled={!history.future.length} aria-label="Redo">↷</button><span className="tool-separator" /><button onClick={() => insertMarkup("**", "**")} aria-label="Bold"><b>B</b></button><button onClick={() => insertMarkup("_", "_")} aria-label="Italic"><i>I</i></button><button onClick={() => insertMarkup("<u>", "</u>")} aria-label="Underline"><u>U</u></button><button onClick={() => insertMarkup("## ")} aria-label="Heading">H2</button><button onClick={() => insertMarkup("- ")} aria-label="Bulleted list">• LIST</button><button onClick={() => insertMarkup("1. ")} aria-label="Numbered list">1. LIST</button><button onClick={() => insertMarkup("- [ ] ")} aria-label="Checklist">☐ TASK</button><button onClick={() => insertMarkup("`", "`")} aria-label="Code">&lt;/&gt;</button><button onClick={() => insertMarkup("[", "](url)")} aria-label="Link">↗ LINK</button><span>MARKDOWN FIELD EDITOR</span></div>
-              <article className="paper-sheet"><div className="paper-stamp">LOCAL FILE · {selectedNote.id.slice(0, 6).toUpperCase()}</div><input className="title-input" value={selectedNote.title} onChange={(event) => updateSelected({ title: event.target.value })} aria-label="Note title" placeholder="Untitled transmission" /><textarea ref={editorRef} value={selectedNote.content} onChange={(event) => updateSelected({ content: event.target.value })} placeholder="Begin field note…" aria-label="Note content" spellCheck="true" /><div className="tag-row">{selectedNote.tags.map((tag) => <button key={tag} onClick={() => setNotes((current) => removeTagFromNote(current, selectedNote.id, tag, new Date().toISOString()) as Note[])} title="Remove tag">#{tag} ×</button>)}<input value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} onKeyDown={addTag} placeholder="+ tag" aria-label="Add tag" /></div></article>
+              <div className="editor-topline"><div className="editor-file-status"><strong>{selectedNote.title || "UNTITLED TRANSMISSION"}</strong><span>{saveState} · {formatUpdated(selectedNote.updatedAt)}</span></div><label><span>FOLDER</span><select value={selectedNote.folder} onChange={(event) => updateSelected({ folder: event.target.value as Folder })}>{folders.map((folder) => <option key={folder}>{folder}</option>)}</select></label><div className="editor-actions"><button className="chat-button" onClick={() => { setChatOpen(true); setChatError("") }} aria-label="Chat with note">✦ CHAT</button><button className={`star-button ${selectedNote.starred ? "active" : ""}`} onClick={() => updateSelected({ starred: !selectedNote.starred })} aria-label={selectedNote.starred ? "Remove favorite" : "Add favorite"}>★</button><button className="danger-button" onClick={deleteSelected}>DELETE</button></div></div>
+              {editorMode === "edit" && <div className="editor-toolbar" aria-label="Formatting shortcuts"><button className="history-tool" onClick={undo} disabled={!history.past.length} aria-label="Undo">↶</button><button className="history-tool" onClick={redo} disabled={!history.future.length} aria-label="Redo">↷</button><span className="tool-separator" /><button onClick={() => insertMarkup("**", "**")} aria-label="Bold"><b>B</b></button><button onClick={() => insertMarkup("_", "_")} aria-label="Italic"><i>I</i></button><button onClick={() => insertMarkup("<u>", "</u>")} aria-label="Underline"><u>U</u></button><button onClick={() => insertMarkup("## ")} aria-label="Heading">H2</button><button onClick={() => insertMarkup("- ")} aria-label="Bulleted list">• LIST</button><button onClick={() => insertMarkup("1. ")} aria-label="Numbered list">1. LIST</button><button onClick={() => insertMarkup("- [ ] ")} aria-label="Checklist">☐ TASK</button><button onClick={() => insertMarkup("`", "`")} aria-label="Code">&lt;/&gt;</button><button onClick={() => insertMarkup("[", "](url)")} aria-label="Link">↗ LINK</button><span>MARKDOWN FIELD EDITOR</span></div>}
+              <article className="paper-sheet"><div className="paper-stamp">LOCAL FILE · {selectedNote.id.slice(0, 6).toUpperCase()}</div><input className="title-input" value={selectedNote.title} onChange={(event) => updateSelected({ title: event.target.value })} aria-label="Note title" placeholder="Untitled transmission" /><div className="mode-switch" aria-label="Editor view"><button className={editorMode === "edit" ? "active" : ""} onClick={() => setEditorMode("edit")}>EDIT</button><button className={editorMode === "preview" ? "active" : ""} onClick={() => setEditorMode("preview")}>PREVIEW</button></div>{editorMode === "edit" ? <textarea ref={editorRef} value={selectedNote.content} onChange={(event) => updateSelected({ content: event.target.value })} placeholder="Begin field note…" aria-label="Note content" spellCheck="true" /> : <MarkdownPreview content={selectedNote.content} onToggleTask={toggleTask} />}<div className="tag-row">{selectedNote.tags.map((tag) => <button key={tag} onClick={() => setNotes((current) => removeTagFromNote(current, selectedNote.id, tag, new Date().toISOString()) as Note[])} title="Remove tag">#{tag} ×</button>)}<input value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} onKeyDown={addTag} placeholder="+ tag" aria-label="Add tag" /></div></article>
               <footer className="editor-footer"><div className="palette" aria-label="Note color"><span>MARKER</span>{noteColors.map((color) => <button key={color} style={{ background: color }} className={selectedNote.color === color ? "active" : ""} onClick={() => updateSelected({ color })} aria-label={`Use color ${color}`} />)}</div><div className="document-stats"><span>{wordCount} WORDS</span><span>{selectedNote.content.length} CHARACTERS</span><span>UPDATED {formatUpdated(selectedNote.updatedAt)}</span></div></footer>
               {chatOpen && <aside className="chat-panel" role="dialog" aria-label={`Chat with ${selectedNote.title || "note"}`}>
                 <header><div><span className="eyebrow">NOTE LINK ACTIVE</span><strong>TACTICAL AI</strong><small>{LLM_MODEL} · ANONYMOUS</small></div><button onClick={() => setChatOpen(false)} aria-label="Close note chat">×</button></header>
@@ -213,6 +228,22 @@ export default function Home() {
     </main>
     </div>
   );
+}
+
+function MarkdownPreview({ content, onToggleTask }: { content: string; onToggleTask: (lineIndex: number, checked: boolean) => void }) {
+  const blocks = parseMarkdown(content) as MarkdownBlock[];
+  if (!blocks.length) return <div className="markdown-preview empty">Nothing to preview yet.</div>;
+  return <div className="markdown-preview" aria-label="Rendered note preview">{blocks.map((block, blockIndex) => {
+    if (block.type === "heading") { const Heading = `h${block.level}` as keyof React.JSX.IntrinsicElements; return <Heading key={blockIndex}>{renderInline(block.text ?? "")}</Heading> }
+    if (block.type === "paragraph") return <p key={blockIndex}>{renderInline(block.text ?? "")}</p>;
+    if (block.type === "blockquote") return <blockquote key={blockIndex}>{renderInline(block.text ?? "")}</blockquote>;
+    if (block.type === "rule") return <hr key={blockIndex} />;
+    if (block.type === "code") return <pre key={blockIndex} data-language={block.language}><code>{block.text}</code></pre>;
+    if (block.type === "task-list") return <ul key={blockIndex} className="task-list">{block.items?.map((item) => <li key={item.lineIndex}><label><input type="checkbox" checked={item.checked} onChange={(event) => onToggleTask(item.lineIndex ?? 0, event.target.checked)} /><span>{renderInline(item.text)}</span></label></li>)}</ul>;
+    if (block.type === "ordered-list") return <ol key={blockIndex}>{block.items?.map((item, itemIndex) => <li key={itemIndex}>{renderInline(item.text)}</li>)}</ol>;
+    if (block.type === "unordered-list") return <ul key={blockIndex}>{block.items?.map((item, itemIndex) => <li key={itemIndex}>{renderInline(item.text)}</li>)}</ul>;
+    return null;
+  })}</div>;
 }
 
 function SettingsPanel({ preferences, setPreferences, noteCount, exportNotes, importNotes, clearAll, close }: { preferences: Preferences; setPreferences: (preferences: Preferences) => void; noteCount: number; exportNotes: () => void; importNotes: () => void; clearAll: () => void; close: () => void }) {

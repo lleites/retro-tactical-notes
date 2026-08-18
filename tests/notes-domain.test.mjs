@@ -16,6 +16,7 @@ import {
   undoHistory,
   updateNote,
 } from "../lib/notes.mjs";
+import { parseMarkdown, toggleMarkdownTask } from "../lib/markdown.mjs";
 
 const note = (overrides = {}) => ({
   id: "n1", title: "Alpha plan", content: "First field report", tags: ["alpha"],
@@ -115,4 +116,17 @@ test("backup parser rejects malformed payloads and invalid note fields", () => {
   assert.throws(() => parseNotesPayload("not json"), SyntaxError);
   assert.equal(isValidNote(note()), true);
   assert.equal(isValidNote({ ...note(), tags: [7] }), false);
+});
+
+test("markdown parser recognizes headings, task lists, ordered lists, quotes, and code", () => {
+  const blocks = parseMarkdown("## Plan\n\n- [ ] Draft\n- [x] Ship\n\n1. First\n2. Second\n\n> Ready\n\n```js\nalert('test')\n```");
+  assert.deepEqual(blocks.map(({ type }) => type), ["heading", "task-list", "ordered-list", "blockquote", "code"]);
+  assert.deepEqual(blocks[1].items, [{ checked: false, text: "Draft", lineIndex: 2 }, { checked: true, text: "Ship", lineIndex: 3 }]);
+  assert.equal(blocks[4].language, "js");
+});
+
+test("task toggling changes only a valid checkbox line", () => {
+  const content = "Intro\n- [ ] Verify autosave\n- ordinary item";
+  assert.equal(toggleMarkdownTask(content, 1, true), "Intro\n- [x] Verify autosave\n- ordinary item");
+  assert.equal(toggleMarkdownTask(content, 2, true), content);
 });
