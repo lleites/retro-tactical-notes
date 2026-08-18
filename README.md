@@ -10,6 +10,7 @@ A local-first note-taking app with a rugged retro field-console interface. Notes
 - Rendered Markdown tables with a toolbar shortcut
 - Archive-first deletion with restore and permanent-delete actions
 - Tag navigation with reusable-tag autocomplete
+- Fullscreen note editing and preview mode
 - 350 ms auto-save with page-close and background protection
 - 100-step undo/redo history with keyboard shortcuts
 - Responsive mobile layout and configurable themes/density

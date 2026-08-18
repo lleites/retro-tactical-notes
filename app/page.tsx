@@ -68,6 +68,7 @@ export default function Home() {
   const [saveState, setSaveState] = useState("LOCAL / READY");
   const [tagDraft, setTagDraft] = useState("");
   const [editorMode, setEditorMode] = useState<EditorMode>("edit");
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatDraft, setChatDraft] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
@@ -76,6 +77,7 @@ export default function Home() {
   const [qaMobile, setQaMobile] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  const editorPanelRef = useRef<HTMLElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const notesRef = useRef(notes);
   useEffect(() => { notesRef.current = notes }, [notes]);
@@ -106,6 +108,13 @@ export default function Home() {
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => { window.removeEventListener("pagehide", flush); document.removeEventListener("visibilitychange", onVisibilityChange) };
   }, [hydrated]);
+  useEffect(() => {
+    const syncFullscreen = () => setIsFullscreen(document.fullscreenElement === editorPanelRef.current);
+    const exitFallback = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape" && isFullscreen && !document.fullscreenElement) setIsFullscreen(false) };
+    document.addEventListener("fullscreenchange", syncFullscreen);
+    window.addEventListener("keydown", exitFallback);
+    return () => { document.removeEventListener("fullscreenchange", syncFullscreen); window.removeEventListener("keydown", exitFallback) };
+  }, [isFullscreen]);
 
   const filteredNotes = useMemo(() => {
     return filterNotes(notes, filter, search) as Note[];
@@ -146,6 +155,12 @@ export default function Home() {
   function undo() { if (!history.past.length) return; setSaveState("LOCAL / SAVING…"); setHistory((current) => undoHistory(current) as NoteHistory) }
   function redo() { if (!history.future.length) return; setSaveState("LOCAL / SAVING…"); setHistory((current) => redoHistory(current) as NoteHistory) }
   function toggleTask(lineIndex: number, checked: boolean) { if (selectedNote) updateSelected({ content: toggleMarkdownTask(selectedNote.content, lineIndex, checked) }) }
+  async function toggleFullscreen() {
+    const panel = editorPanelRef.current; if (!panel) return;
+    if (document.fullscreenElement) { await document.exitFullscreen(); return; }
+    if (isFullscreen) { setIsFullscreen(false); return; }
+    try { await panel.requestFullscreen(); setIsFullscreen(true) } catch { setIsFullscreen(true) }
+  }
   function appendChat(noteId: string, message: ChatMessage) { setChatByNote((current) => ({ ...current, [noteId]: [...(current[noteId] ?? []), message] })) }
   async function sendChat(mode: ChatMode) {
     const target = selectedNote; const instruction = chatDraft.trim();
@@ -214,9 +229,9 @@ export default function Home() {
             </div>
           </section>
 
-          <section className="editor-panel">
+          <section ref={editorPanelRef} className={`editor-panel ${isFullscreen ? "editor-panel-fullscreen" : ""}`}>
             {selectedNote ? <>
-              <div className="editor-topline"><div className="editor-file-status"><strong>{selectedNote.title || "UNTITLED TRANSMISSION"}</strong><span>{selectedNote.folder === "Archive" ? "ARCHIVED" : saveState} · {formatUpdated(selectedNote.updatedAt)}</span></div><div className="editor-actions"><button className="chat-button" onClick={() => { setChatOpen(true); setChatError("") }} aria-label="Chat with note">✦ CHAT</button><button className={`star-button ${selectedNote.starred ? "active" : ""}`} onClick={() => updateSelected({ starred: !selectedNote.starred })} aria-label={selectedNote.starred ? "Remove favorite" : "Add favorite"}>★</button>{selectedNote.folder === "Archive" ? <><button className="restore-button" onClick={restoreSelected}>↥ RESTORE</button><button className="danger-button" onClick={deleteSelected}>DELETE</button></> : <button className="archive-button" onClick={archiveSelected}>▣ ARCHIVE</button>}</div></div>
+              <div className="editor-topline"><div className="editor-file-status"><strong>{selectedNote.title || "UNTITLED TRANSMISSION"}</strong><span>{selectedNote.folder === "Archive" ? "ARCHIVED" : saveState} · {formatUpdated(selectedNote.updatedAt)}</span></div><div className="editor-actions"><button className={`fullscreen-button ${isFullscreen ? "active" : ""}`} onClick={() => void toggleFullscreen()} aria-label={isFullscreen ? "Exit note fullscreen" : "Open note fullscreen"}>{isFullscreen ? "⊡ EXIT" : "⛶ FULLSCREEN"}</button><button className="chat-button" onClick={() => { setChatOpen(true); setChatError("") }} aria-label="Chat with note">✦ CHAT</button><button className={`star-button ${selectedNote.starred ? "active" : ""}`} onClick={() => updateSelected({ starred: !selectedNote.starred })} aria-label={selectedNote.starred ? "Remove favorite" : "Add favorite"}>★</button>{selectedNote.folder === "Archive" ? <><button className="restore-button" onClick={restoreSelected}>↥ RESTORE</button><button className="danger-button" onClick={deleteSelected}>DELETE</button></> : <button className="archive-button" onClick={archiveSelected}>▣ ARCHIVE</button>}</div></div>
               {editorMode === "edit" && <div className="editor-toolbar" aria-label="Formatting shortcuts"><button className="history-tool" onClick={undo} disabled={!history.past.length} aria-label="Undo">↶</button><button className="history-tool" onClick={redo} disabled={!history.future.length} aria-label="Redo">↷</button><span className="tool-separator" /><button onClick={() => insertMarkup("**", "**")} aria-label="Bold"><b>B</b></button><button onClick={() => insertMarkup("_", "_")} aria-label="Italic"><i>I</i></button><button onClick={() => insertMarkup("<u>", "</u>")} aria-label="Underline"><u>U</u></button><button onClick={() => insertMarkup("## ")} aria-label="Heading">H2</button><button onClick={() => insertMarkup("- ")} aria-label="Bulleted list">• LIST</button><button onClick={() => insertMarkup("1. ")} aria-label="Numbered list">1. LIST</button><button onClick={() => insertMarkup("- [ ] ")} aria-label="Checklist">☐ TASK</button><button onClick={() => insertMarkup("`", "`")} aria-label="Code">&lt;/&gt;</button><button onClick={() => insertMarkup("[", "](url)")} aria-label="Link">↗ LINK</button><button onClick={() => insertMarkup("| Column | Value |\n| --- | --- |\n| Item | Value |\n")} aria-label="Table">▦ TABLE</button><span>MARKDOWN FIELD EDITOR</span></div>}
               <article className="paper-sheet"><div className="paper-stamp">LOCAL FILE · {selectedNote.id.slice(0, 6).toUpperCase()}</div><input className="title-input" value={selectedNote.title} onChange={(event) => updateSelected({ title: event.target.value })} aria-label="Note title" placeholder="Untitled transmission" /><div className="mode-switch" aria-label="Editor view"><button className={editorMode === "edit" ? "active" : ""} onClick={() => setEditorMode("edit")}>EDIT</button><button className={editorMode === "preview" ? "active" : ""} onClick={() => setEditorMode("preview")}>PREVIEW</button></div>{editorMode === "edit" ? <textarea ref={editorRef} value={selectedNote.content} onChange={(event) => updateSelected({ content: event.target.value })} placeholder="Begin field note…" aria-label="Note content" spellCheck="true" /> : <MarkdownPreview content={selectedNote.content} onToggleTask={toggleTask} />}<div className="tag-row">{selectedNote.tags.map((tag) => <button key={tag} onClick={() => setNotes((current) => removeTagFromNote(current, selectedNote.id, tag, new Date().toISOString()) as Note[])} title="Remove tag">#{tag} ×</button>)}<input list="known-tags" value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} onKeyDown={addTag} placeholder="+ tag" aria-label="Add tag" /><datalist id="known-tags">{allTags.filter(({ tag }) => !selectedNote.tags.includes(tag)).map(({ tag }) => <option key={tag} value={tag} />)}</datalist></div></article>
               <footer className="editor-footer"><div className="palette" aria-label="Note color"><span>MARKER</span>{noteColors.map((color) => <button key={color} style={{ background: color }} className={selectedNote.color === color ? "active" : ""} onClick={() => updateSelected({ color })} aria-label={`Use color ${color}`} />)}</div><div className="document-stats"><span>{wordCount} WORDS</span><span>{selectedNote.content.length} CHARACTERS</span><span>UPDATED {formatUpdated(selectedNote.updatedAt)}</span></div></footer>
