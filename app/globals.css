@@ -201,7 +201,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 
 @container(max-width:1180px){
   .workspace{grid-template-columns:185px 330px minmax(390px,1fr)}
-  .editor-topline{grid-template-columns:1fr auto}.editor-topline label{display:none}.editor-actions{flex-wrap:wrap;justify-content:flex-end}.editor-actions .star-button{display:none}.editor-toolbar button:nth-of-type(6),.editor-toolbar button:nth-of-type(9){display:none}
+  .editor-topline{grid-template-columns:1fr auto}.editor-topline label{display:none}.editor-actions{flex-wrap:wrap;justify-content:flex-end}.editor-actions .star-button{display:none}
 }
 @container(max-width:900px){
   .retro-app{overflow:auto}.workspace{height:auto;min-height:calc(100vh - 102px);grid-template-columns:170px 285px minmax(360px,1fr)}
