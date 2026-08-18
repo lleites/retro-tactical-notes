@@ -30,6 +30,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Prepare build scripts
+        run: chmod +x scripts/*.sh
       - name: Run lint
         run: npm run lint
       - name: Run unit tests
