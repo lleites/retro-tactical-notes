@@ -10,10 +10,10 @@ A local-first note-taking app with a rugged retro field-console interface. Notes
 - Rendered Markdown tables with a toolbar shortcut
 - Archive-first deletion with restore and permanent-delete actions
 - Tag navigation with reusable-tag autocomplete
-- Fullscreen note editing and preview mode
+- Full-note editing and rendered preview mode
 - 350 ms auto-save with page-close and background protection
 - 100-step undo/redo history with keyboard shortcuts
-- Responsive mobile layout and configurable themes/density
+- Responsive mobile layout and configurable themes, density, and note font size
 - Browser `localStorage` persistence only
 - Optional note chat and rewrite actions through OVHcloud's anonymous OpenAI-compatible endpoint
 
@@ -36,6 +36,10 @@ npm test
 ```
 
 The test suite covers note operations, filtering, tags, formatting helpers, backup validation, undo/redo history, mocked LLM success/error/rate-limit behavior, and production rendering.
+
+## AI prompts
+
+The editable system prompts live in [`prompts/chat-note.md`](prompts/chat-note.md) and [`prompts/rewrite-note.md`](prompts/rewrite-note.md). Keep the `{{NOTE_CONTEXT}}` placeholder so the app can inject the active note at runtime.
 
 ## GitHub Pages
 

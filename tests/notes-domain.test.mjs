@@ -3,11 +3,13 @@ import test from "node:test";
 import {
   HISTORY_LIMIT,
   addTagToNote,
+  applyLinePrefix,
   applyMarkup,
   commitHistory,
   createHistory,
   deleteNote,
   filterNotes,
+  insertMarkdownBlock,
   isValidNote,
   parseNotesPayload,
   redoHistory,
@@ -103,6 +105,21 @@ test("tag helpers normalize, deduplicate, add, and remove tags", () => {
 test("applyMarkup wraps selections and clamps invalid ranges", () => {
   assert.deepEqual(applyMarkup("hello world", 6, 11, "**", "**"), { content: "hello **world**", selectionStart: 8, selectionEnd: 13 });
   assert.deepEqual(applyMarkup("abc", -5, 99, "_", "_"), { content: "_abc_", selectionStart: 1, selectionEnd: 4 });
+  assert.deepEqual(applyMarkup("", 0, 0, "*", "*", "italic text"), { content: "*italic text*", selectionStart: 1, selectionEnd: 12 });
+});
+
+test("line-aware Markdown prefixes start at line boundaries and cover selections", () => {
+  assert.deepEqual(applyLinePrefix("Intro text", 5, 5, "## ", "Heading"), { content: "## Intro text", selectionStart: 3, selectionEnd: 13 });
+  assert.deepEqual(applyLinePrefix("Milk\nBread", 0, 10, "- [ ] ", "Task"), { content: "- [ ] Milk\n- [ ] Bread", selectionStart: 6, selectionEnd: 22 });
+  assert.deepEqual(applyLinePrefix("", 0, 0, "- ", "List item"), { content: "- List item", selectionStart: 2, selectionEnd: 11 });
+});
+
+test("Markdown blocks are separated from surrounding text", () => {
+  assert.deepEqual(insertMarkdownBlock("BeforeAfter", 6, 6, "| A | B |\n| --- | --- |"), {
+    content: "Before\n\n| A | B |\n| --- | --- |\n\nAfter",
+    selectionStart: 8,
+    selectionEnd: 31,
+  });
 });
 
 test("backup serialization round-trips valid notes", () => {

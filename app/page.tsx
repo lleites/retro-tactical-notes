@@ -3,11 +3,13 @@
 import { ChangeEvent, FormEvent, KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   addTagToNote,
+  applyLinePrefix,
   applyMarkup,
   commitHistory,
   createHistory,
   deleteNote,
   filterNotes,
+  insertMarkdownBlock,
   parseNotesPayload,
   redoHistory,
   removeTagFromNote,
@@ -17,6 +19,8 @@ import {
 } from "@/lib/notes.mjs";
 import { LLM_MODEL, requestCompletion } from "@/lib/llmClient.mjs";
 import { parseMarkdown, toggleMarkdownTask } from "@/lib/markdown.mjs";
+import chatNotePrompt from "@/prompts/chat-note.md?raw";
+import rewriteNotePrompt from "@/prompts/rewrite-note.md?raw";
 
 type Folder = "Field Notes" | "Projects" | "Personal" | "Ideas" | "Archive";
 type ActiveFolder = Exclude<Folder, "Archive">;
@@ -47,10 +51,12 @@ function makeId() { return typeof crypto !== "undefined" && "randomUUID" in cryp
 function formatUpdated(iso: string) { return new Intl.DateTimeFormat("en-GB", { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC" }).format(new Date(iso)) }
 function cleanRewrite(value: string) { return value.replace(/^```(?:markdown|md|text)?\s*/i, "").replace(/\s*```$/, "").trim() }
 function renderInline(value: string): ReactNode[] {
-  const tokenPattern = /(\[[^\]]+\]\(https?:\/\/[^\s)]+\)|`[^`]+`|\*\*[^*]+\*\*|_[^_]+_)/g;
+  const tokenPattern = /(\[[^\]]+\]\(https?:\/\/[^\s)]+\)|`[^`]+`|\*\*[^*]+\*\*|~~[^~]+~~|\*[^*]+\*|_[^_]+_)/g;
   return value.split(tokenPattern).filter(Boolean).map((part, index) => {
     const link = part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/); if (link) return <a key={index} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a>;
     if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith("~~") && part.endsWith("~~")) return <s key={index}>{part.slice(2, -2)}</s>;
+    if (part.startsWith("*") && part.endsWith("*")) return <em key={index}>{part.slice(1, -1)}</em>;
     if (part.startsWith("_") && part.endsWith("_")) return <em key={index}>{part.slice(1, -1)}</em>;
     if (part.startsWith("`") && part.endsWith("`")) return <code key={index}>{part.slice(1, -1)}</code>;
     return part;
@@ -144,7 +150,10 @@ export default function Home() {
   function archiveSelected() { if (!selectedNote || selectedNote.folder === "Archive") return; const nextId = filteredNotes.find((note) => note.id !== selectedNote.id)?.id ?? ""; updateSelected({ folder: "Archive", archivedFrom: selectedNote.folder }); setSelectedId(nextId) }
   function restoreSelected() { if (!selectedNote || selectedNote.folder !== "Archive") return; updateSelected({ folder: selectedNote.archivedFrom ?? "Field Notes", archivedFrom: undefined }); setFilter("All") }
   function deleteSelected() { if (!selectedNote || selectedNote.folder !== "Archive" || !window.confirm(`Permanently delete “${selectedNote.title}”?`)) return; const remaining = deleteNote(notes, selectedNote.id) as Note[]; setNotes(remaining); setSelectedId(remaining.find((note) => note.folder === "Archive")?.id ?? "") }
-  function insertMarkup(prefix: string, suffix = "") { if (!selectedNote || !editorRef.current) return; const textarea = editorRef.current; const result = applyMarkup(selectedNote.content, textarea.selectionStart, textarea.selectionEnd, prefix, suffix); updateSelected({ content: result.content }); window.setTimeout(() => { textarea.focus(); textarea.setSelectionRange(result.selectionStart, result.selectionEnd) }) }
+  function applyEditorResult(result: { content: string; selectionStart: number; selectionEnd: number }) { updateSelected({ content: result.content }); window.setTimeout(() => { editorRef.current?.focus(); editorRef.current?.setSelectionRange(result.selectionStart, result.selectionEnd) }) }
+  function insertMarkup(prefix: string, suffix: string, placeholder: string) { if (!selectedNote || !editorRef.current) return; applyEditorResult(applyMarkup(selectedNote.content, editorRef.current.selectionStart, editorRef.current.selectionEnd, prefix, suffix, placeholder)) }
+  function prefixLines(prefix: string, placeholder: string) { if (!selectedNote || !editorRef.current) return; applyEditorResult(applyLinePrefix(selectedNote.content, editorRef.current.selectionStart, editorRef.current.selectionEnd, prefix, placeholder)) }
+  function insertBlock(block: string) { if (!selectedNote || !editorRef.current) return; applyEditorResult(insertMarkdownBlock(selectedNote.content, editorRef.current.selectionStart, editorRef.current.selectionEnd, block)) }
   function addTag(event: KeyboardEvent<HTMLInputElement>) { if (event.key !== "Enter" || !selectedNote) return; event.preventDefault(); setNotes((current) => addTagToNote(current, selectedNote.id, tagDraft, new Date().toISOString()) as Note[]); setTagDraft("") }
   function exportNotes() { const blob = new Blob([serializeNotes(notes, new Date().toISOString())], { type: "application/json" }); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = `retro-tactical-notes-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(url) }
   function importNotes(event: ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { try { const imported = parseNotesPayload(String(reader.result)) as Note[]; setNotes(imported); setSelectedId(imported[0]?.id ?? ""); setSaveState("LOCAL / IMPORTED") } catch { window.alert("That file is not a valid Retro Tactical Notes backup.") } }; reader.readAsText(file); event.target.value = "" }
@@ -156,15 +165,14 @@ export default function Home() {
   function toggleFullNote() { setIsFullNote((current) => !current) }
   function appendChat(noteId: string, message: ChatMessage) { setChatByNote((current) => ({ ...current, [noteId]: [...(current[noteId] ?? []), message] })) }
   async function sendChat(mode: ChatMode) {
-    const target = selectedNote; const instruction = chatDraft.trim();
-    if (!target || !instruction || chatLoading) return;
+    const target = selectedNote; const typedInstruction = chatDraft.trim();
+    if (!target || (mode === "ask" && !typedInstruction) || chatLoading) return;
+    const instruction = typedInstruction || "Improve this note's Markdown structure, formatting, and readability.";
     const priorMessages = chatByNote[target.id] ?? [];
     const userMessage: ChatMessage = { id: makeId(), role: "user", content: instruction };
     appendChat(target.id, userMessage); setChatDraft(""); setChatError(""); setChatLoading(true);
     const noteContext = `Title: ${target.title || "Untitled note"}\n\nNote content:\n${target.content || "(empty note)"}`;
-    const system = mode === "rewrite"
-      ? `You rewrite a single Markdown note. Apply the user's requested changes while preserving useful information that was not targeted. Return only the complete replacement note content, without commentary or code fences.\n\n${noteContext}`
-      : `You are a concise assistant discussing one note. Use the supplied note as the primary context. If the answer is not in the note, say so. Do not claim to edit the note; the interface has a separate rewrite action.\n\n${noteContext}`;
+    const system = (mode === "rewrite" ? rewriteNotePrompt : chatNotePrompt).replace("{{NOTE_CONTEXT}}", noteContext);
     const conversation = priorMessages.slice(-6).map(({ role, content }) => ({ role, content }));
     try {
       const response = await requestCompletion([{ role: "system", content: system }, ...conversation, { role: "user", content: instruction }]);
@@ -225,7 +233,7 @@ export default function Home() {
           <section className={`editor-panel ${isFullNote ? "editor-panel-fullscreen" : ""}`}>
             {selectedNote ? <>
               <div className="editor-topline"><div className="editor-file-status"><strong>{selectedNote.title || "UNTITLED TRANSMISSION"}</strong><span>{selectedNote.folder === "Archive" ? "ARCHIVED" : saveState} · {formatUpdated(selectedNote.updatedAt)}</span></div><div className="editor-actions"><button className={`fullscreen-button ${isFullNote ? "active" : ""}`} onClick={toggleFullNote} aria-label={isFullNote ? "Exit full note view" : "Open full note view"}>{isFullNote ? "⊡ EXIT" : "⛶ FULL NOTE"}</button><button className="chat-button" onClick={() => { setChatOpen(true); setChatError("") }} aria-label="Chat with note">✦ CHAT</button><button className={`star-button ${selectedNote.starred ? "active" : ""}`} onClick={() => updateSelected({ starred: !selectedNote.starred })} aria-label={selectedNote.starred ? "Remove favorite" : "Add favorite"}>★</button>{selectedNote.folder === "Archive" ? <><button className="restore-button" onClick={restoreSelected}>↥ RESTORE</button><button className="danger-button" onClick={deleteSelected}>DELETE</button></> : <button className="archive-button" onClick={archiveSelected}>▣ ARCHIVE</button>}</div></div>
-              {editorMode === "edit" && <div className="editor-toolbar" aria-label="Formatting shortcuts"><button className="history-tool" onClick={undo} disabled={!history.past.length} aria-label="Undo">↶</button><button className="history-tool" onClick={redo} disabled={!history.future.length} aria-label="Redo">↷</button><span className="tool-separator" /><button onClick={() => insertMarkup("**", "**")} aria-label="Bold"><b>B</b></button><button onClick={() => insertMarkup("_", "_")} aria-label="Italic"><i>I</i></button><button onClick={() => insertMarkup("<u>", "</u>")} aria-label="Underline"><u>U</u></button><button onClick={() => insertMarkup("## ")} aria-label="Heading">H2</button><button onClick={() => insertMarkup("- ")} aria-label="Bulleted list">• LIST</button><button onClick={() => insertMarkup("1. ")} aria-label="Numbered list">1. LIST</button><button onClick={() => insertMarkup("- [ ] ")} aria-label="Checklist">☐ TASK</button><button onClick={() => insertMarkup("`", "`")} aria-label="Code">&lt;/&gt;</button><button onClick={() => insertMarkup("[", "](url)")} aria-label="Link">↗ LINK</button><button onClick={() => insertMarkup("| Column | Value |\n| --- | --- |\n| Item | Value |\n")} aria-label="Table">▦ TABLE</button><span>MARKDOWN FIELD EDITOR</span></div>}
+              {editorMode === "edit" && <div className="editor-toolbar" aria-label="Formatting shortcuts"><button className="history-tool" onClick={undo} disabled={!history.past.length} aria-label="Undo">↶</button><button className="history-tool" onClick={redo} disabled={!history.future.length} aria-label="Redo">↷</button><span className="tool-separator" /><button onClick={() => insertMarkup("**", "**", "bold text")} aria-label="Bold"><b>B</b></button><button onClick={() => insertMarkup("*", "*", "italic text")} aria-label="Italic"><i>I</i></button><button onClick={() => insertMarkup("~~", "~~", "strikethrough text")} aria-label="Strikethrough"><s>S</s></button><button onClick={() => prefixLines("## ", "Heading")} aria-label="Heading">H2</button><button onClick={() => prefixLines("- ", "List item")} aria-label="Bulleted list">• LIST</button><button onClick={() => prefixLines("1. ", "List item")} aria-label="Numbered list">1. LIST</button><button onClick={() => prefixLines("- [ ] ", "Task")} aria-label="Checklist">☐ TASK</button><button onClick={() => insertMarkup("`", "`", "code")} aria-label="Code">&lt;/&gt;</button><button onClick={() => insertMarkup("[", "](https://example.com)", "link text")} aria-label="Link">↗ LINK</button><button onClick={() => insertBlock("| Column | Value |\n| --- | --- |\n| Item | Value |\n")} aria-label="Table">▦ TABLE</button><span>MARKDOWN FIELD EDITOR</span></div>}
               <article className="paper-sheet"><div className="paper-stamp">LOCAL FILE · {selectedNote.id.slice(0, 6).toUpperCase()}</div><input className="title-input" value={selectedNote.title} onChange={(event) => updateSelected({ title: event.target.value })} aria-label="Note title" placeholder="Untitled transmission" /><div className="mode-switch" aria-label="Editor view"><button className={editorMode === "edit" ? "active" : ""} onClick={() => setEditorMode("edit")}>EDIT</button><button className={editorMode === "preview" ? "active" : ""} onClick={() => setEditorMode("preview")}>PREVIEW</button></div>{editorMode === "edit" ? <textarea ref={editorRef} value={selectedNote.content} onChange={(event) => updateSelected({ content: event.target.value })} placeholder="Begin field note…" aria-label="Note content" spellCheck="true" /> : <MarkdownPreview content={selectedNote.content} onToggleTask={toggleTask} />}<div className="tag-row">{selectedNote.tags.map((tag) => <button key={tag} onClick={() => setNotes((current) => removeTagFromNote(current, selectedNote.id, tag, new Date().toISOString()) as Note[])} title="Remove tag">#{tag} ×</button>)}<input list="known-tags" value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} onKeyDown={addTag} placeholder="+ tag" aria-label="Add tag" /><datalist id="known-tags">{allTags.filter(({ tag }) => !selectedNote.tags.includes(tag)).map(({ tag }) => <option key={tag} value={tag} />)}</datalist></div></article>
               <footer className="editor-footer"><div className="palette" aria-label="Note color"><span>MARKER</span>{noteColors.map((color) => <button key={color} style={{ background: color }} className={selectedNote.color === color ? "active" : ""} onClick={() => updateSelected({ color })} aria-label={`Use color ${color}`} />)}</div><div className="document-stats"><span>{wordCount} WORDS</span><span>{selectedNote.content.length} CHARACTERS</span><span>UPDATED {formatUpdated(selectedNote.updatedAt)}</span></div></footer>
               {chatOpen && <aside className="chat-panel" role="dialog" aria-label={`Chat with ${selectedNote.title || "note"}`}>
@@ -237,7 +245,7 @@ export default function Home() {
                   {chatLoading && <div className="chat-loading"><i /><span>CONTACTING OVH ENDPOINT…</span></div>}
                 </div>
                 {chatError && <div className="chat-error" role="alert">{chatError}</div>}
-                <form onSubmit={submitChat}><textarea value={chatDraft} onChange={(event) => setChatDraft(event.target.value)} placeholder="Ask or describe the rewrite…" aria-label="Message about note" disabled={chatLoading} /><div><small>Anonymous limit: 2 requests/minute per IP and model.</small><span><button type="submit" className="secondary-button" disabled={!chatDraft.trim() || chatLoading}>ASK</button><button type="button" className="primary-button" onClick={() => void sendChat("rewrite")} disabled={!chatDraft.trim() || chatLoading}>↻ REWRITE NOTE</button></span></div></form>
+                <form onSubmit={submitChat}><textarea value={chatDraft} onChange={(event) => setChatDraft(event.target.value)} placeholder="Ask, describe a rewrite, or leave blank to improve formatting…" aria-label="Message about note" disabled={chatLoading} /><div><small>Anonymous limit: 2 requests/minute per IP and model.</small><span><button type="submit" className="secondary-button" disabled={!chatDraft.trim() || chatLoading}>ASK</button><button type="button" className="primary-button" onClick={() => void sendChat("rewrite")} disabled={chatLoading}>↻ REWRITE NOTE</button></span></div></form>
               </aside>}
             </> : <div className="empty-editor"><div className="empty-badge">RT</div><h2>NO FILE SELECTED</h2><p>Create a new note or choose a record from the archive.</p><button className="primary-button" onClick={createNote}>＋ NEW NOTE</button></div>}
           </section>
