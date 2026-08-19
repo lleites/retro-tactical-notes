@@ -1,5 +1,3 @@
-"use client";
-
 import { ChangeEvent, FormEvent, KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   addTagToNote,
@@ -29,7 +27,7 @@ type Theme = "olive" | "midnight" | "paper";
 type Density = "compact" | "comfortable";
 type NoteFontSize = "small" | "medium" | "large";
 type Note = { id: string; title: string; content: string; tags: string[]; folder: Folder; archivedFrom?: ActiveFolder; color: string; starred: boolean; createdAt: string; updatedAt: string };
-type Preferences = { theme: Theme; density: Density; fontSize: NoteFontSize; animations: boolean; sounds: boolean };
+type Preferences = { theme: Theme; density: Density; fontSize: NoteFontSize; animations: boolean };
 type NoteHistory = { past: Note[][]; present: Note[]; future: Note[][] };
 type ChatMessage = { id: string; role: "user" | "assistant"; content: string };
 type ChatMode = "ask" | "rewrite";
@@ -39,7 +37,7 @@ type MarkdownBlock = { type: string; level?: number; text?: string; language?: s
 const NOTES_KEY = "retro-notes:v1";
 const PREFS_KEY = "retro-notes:preferences:v1";
 const noteColors = ["#d77834", "#d6b43c", "#6e9f70", "#5d8fa7", "#a96d7d"];
-const defaultPreferences: Preferences = { theme: "olive", density: "comfortable", fontSize: "medium", animations: true, sounds: false };
+const defaultPreferences: Preferences = { theme: "olive", density: "comfortable", fontSize: "medium", animations: true };
 const seedNotes: Note[] = [
   { id: "welcome", title: "Welcome to Retro Tactical Notes", content: "Your notes are stored only in this browser.\n\n## Quick start\n\n- Create a note with the orange button\n- Use tags to organize your work\n- Press Ctrl/⌘ + K to search\n- Changes save automatically\n\nNo account. No sync. No tracking.", tags: ["welcome", "local-first"], folder: "Field Notes", color: "#d77834", starred: true, createdAt: "2026-08-17T17:30:00.000Z", updatedAt: "2026-08-17T17:30:00.000Z" },
   { id: "launch-checklist", title: "Launch checklist", content: "## Before release\n\n- [x] Define the core workflow\n- [x] Keep storage local\n- [ ] Test on mobile\n- [ ] Share with the team", tags: ["project", "checklist"], folder: "Projects", color: "#d6b43c", starred: false, createdAt: "2026-08-16T09:15:00.000Z", updatedAt: "2026-08-17T14:08:00.000Z" },
@@ -282,7 +280,7 @@ function SettingsPanel({ preferences, setPreferences, noteCount, exportNotes, im
         <section className="setting-card"><div><span className="eyebrow">DISPLAY PROFILE</span><h2>Interface theme</h2><p>Choose the field-kit finish that suits your workspace.</p></div><div className="theme-options">{(["olive", "midnight", "paper"] as Theme[]).map((theme) => <button key={theme} className={`theme-card theme-${theme} ${preferences.theme === theme ? "active" : ""}`} onClick={() => setPreferences({ ...preferences, theme })}><span><i /><i /><i /></span><strong>{theme === "olive" ? "BUNKER OLIVE" : theme === "midnight" ? "MIDNIGHT STEEL" : "FIELD PAPER"}</strong><small>{preferences.theme === theme ? "● ACTIVE" : "SELECT"}</small></button>)}</div></section>
         <section className="setting-card two-column"><div><span className="eyebrow">PIXEL DENSITY</span><h2>Spacing</h2><p>Control how much information fits on screen.</p></div><div className="segmented"><button className={preferences.density === "compact" ? "active" : ""} onClick={() => setPreferences({ ...preferences, density: "compact" })}>COMPACT</button><button className={preferences.density === "comfortable" ? "active" : ""} onClick={() => setPreferences({ ...preferences, density: "comfortable" })}>COMFORTABLE</button></div></section>
         <section className="setting-card two-column"><div><span className="eyebrow">READING SIZE</span><h2>Note font size</h2><p>Adjust text in the note editor and rendered Markdown preview.</p></div><div className="segmented font-size-options">{(["small", "medium", "large"] as NoteFontSize[]).map((fontSize) => <button key={fontSize} className={preferences.fontSize === fontSize ? "active" : ""} onClick={() => setPreferences({ ...preferences, fontSize })}>{fontSize.toUpperCase()}</button>)}</div></section>
-        <section className="setting-card two-column"><div><span className="eyebrow">INTERFACE EFFECTS</span><h2>Motion & sound</h2><p>Keep the desk quiet or add a little arcade response.</p></div><div className="toggle-stack"><label><span><strong>Animations</strong><small>Panel and selection movement</small></span><input type="checkbox" checked={preferences.animations} onChange={(event) => setPreferences({ ...preferences, animations: event.target.checked })} /></label><label><span><strong>Interface sounds</strong><small>Reserved for a future update</small></span><input type="checkbox" checked={preferences.sounds} onChange={(event) => setPreferences({ ...preferences, sounds: event.target.checked })} /></label></div></section>
+        <section className="setting-card two-column"><div><span className="eyebrow">INTERFACE EFFECTS</span><h2>Motion</h2><p>Control panel and selection movement throughout the interface.</p></div><div className="toggle-stack"><label><span><strong>Animations</strong><small>Panel and selection movement</small></span><input type="checkbox" checked={preferences.animations} onChange={(event) => setPreferences({ ...preferences, animations: event.target.checked })} /></label></div></section>
         <section className="setting-card backup-card"><div><span className="eyebrow">LOCAL STORAGE ONLY</span><h2>Backup & restore</h2><p>{noteCount} notes are stored on this device. Export a JSON file before clearing browser data or moving devices.</p></div><div className="backup-actions"><button className="primary-button" onClick={exportNotes}>↓ EXPORT JSON</button><button className="secondary-button" onClick={importNotes}>↑ IMPORT JSON</button><button className="danger-button" onClick={clearAll}>ERASE ALL DATA</button></div></section>
         <div className="about-strip"><span className="brand-mark">RT</span><div><strong>RETRO TACTICAL NOTES · MK-II</strong><p>Notes stay local. Optional AI sends only the active note and chat messages when requested.</p></div><small>BUILD 1.4.0</small></div>
       </div>

@@ -28,6 +28,8 @@ npm ci
 npm run dev
 ```
 
+The application is a browser-only React/Vite project. It has no backend, Worker, authentication service, or database.
+
 ## Validation
 
 ```bash
@@ -43,7 +45,7 @@ The editable system prompts live in [`prompts/chat-note.md`](prompts/chat-note.m
 
 ## GitHub Pages
 
-Every push to `main` builds and deploys the static browser-only app to GitHub Pages. The Pages build uses `npm run build:pages` and is configured for the `/retro-tactical-notes/` project path.
+Every push to `main` builds and tests the static browser-only app once, then deploys that verified artifact to GitHub Pages. The Pages build uses `npm run build:pages` and is configured for the `/retro-tactical-notes/` project path.
 
 ## Privacy
 
